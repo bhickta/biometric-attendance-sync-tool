@@ -1,5 +1,6 @@
 
-import local_config as config
+from local_config import erpnext_config
+from error_handler import allowlisted_errors, Errors
 import requests
 import datetime
 import json
@@ -11,47 +12,26 @@ from logging.handlers import RotatingFileHandler
 import pickledb
 from zk import ZK, const
 
-EMPLOYEE_NOT_FOUND_ERROR_MESSAGE = "No Employee found for the given employee field value"
-EMPLOYEE_INACTIVE_ERROR_MESSAGE = "Transactions cannot be created for an Inactive Employee"
-DUPLICATE_EMPLOYEE_CHECKIN_ERROR_MESSAGE = "This employee already has a log with the same timestamp"
-allowlisted_errors = [EMPLOYEE_NOT_FOUND_ERROR_MESSAGE, EMPLOYEE_INACTIVE_ERROR_MESSAGE, DUPLICATE_EMPLOYEE_CHECKIN_ERROR_MESSAGE]
+device_punch_values_IN = getattr(erpnext_config, 'device_punch_values_IN', [0,4])
+device_punch_values_OUT = getattr(erpnext_config, 'device_punch_values_OUT', [1,5])
 
-if hasattr(config,'allowed_exceptions'):
-    allowlisted_errors_temp = []
-    for error_number in config.allowed_exceptions:
-        allowlisted_errors_temp.append(allowlisted_errors[error_number-1])
-    allowlisted_errors = allowlisted_errors_temp
-
-device_punch_values_IN = getattr(config, 'device_punch_values_IN', [0,4])
-device_punch_values_OUT = getattr(config, 'device_punch_values_OUT', [1,5])
-ERPNEXT_VERSION = getattr(config, 'ERPNEXT_VERSION', 13)
-
-# possible area of further developemt
-    # Real-time events - setup getting events pushed from the machine rather then polling.
-        #- this is documented as 'Real-time events' in the ZKProtocol manual.
-
-# Notes:
-# Status Keys in status.json
-#  - lift_off_timestamp
-#  - mission_accomplished_timestamp
-#  - <device_id>_pull_timestamp
-#  - <device_id>_push_timestamp
-#  - <shift_type>_sync_timestamp
+def erpnext_version(version):
+    return getattr(erpnext_config, 'ERPNEXT_VERSION', version)
 
 def main():
-    """Takes care of checking if it is time to pull data based on config,
+    """Takes care of checking if it is time to pull data based on erpnext_config,
     then calling the relevent functions to pull data and push to EPRNext.
 
     """
     try:
         last_lift_off_timestamp = _safe_convert_date(status.get('lift_off_timestamp'), "%Y-%m-%d %H:%M:%S.%f")
-        if (last_lift_off_timestamp and last_lift_off_timestamp < datetime.datetime.now() - datetime.timedelta(minutes=config.PULL_FREQUENCY)) or not last_lift_off_timestamp:
+        if (last_lift_off_timestamp and last_lift_off_timestamp < datetime.datetime.now() - datetime.timedelta(minutes=erpnext_config.PULL_FREQUENCY)) or not last_lift_off_timestamp:
             status.set('lift_off_timestamp', str(datetime.datetime.now()))
             info_logger.info("Cleared for lift off!")
-            for device in config.devices:
+            for device in erpnext_config.devices:
                 device_attendance_logs = None
-                info_logger.info("Processing Device: "+ device['device_id'])
-                dump_file = get_dump_file_name_and_directory(device['device_id'], device['ip'])
+                info_logger.info("Processing Device: "+ device.device_id)
+                dump_file = get_dump_file_name_and_directory(device.device_id, device.ip)
                 if os.path.exists(dump_file):
                     info_logger.error('Device Attendance Dump Found in Log Directory. This can mean the program crashed unexpectedly. Retrying with dumped data.')
                     with open(dump_file, 'r') as f:
@@ -60,14 +40,14 @@ def main():
                             device_attendance_logs = list(map(lambda x: _apply_function_to_key(x, 'timestamp', datetime.datetime.fromtimestamp), json.loads(file_contents)))
                 try:
                     pull_process_and_push_data(device, device_attendance_logs)
-                    status.set(f'{device["device_id"]}_push_timestamp', str(datetime.datetime.now()))
+                    status.set(f'{device.device_id}_push_timestamp', str(datetime.datetime.now()))
                     if os.path.exists(dump_file):
                         os.remove(dump_file)
-                    info_logger.info("Successfully processed Device: "+ device['device_id'])
+                    info_logger.info("Successfully processed Device: "+ device.device_id)
                 except:
                     error_logger.exception('exception when calling pull_process_and_push_data function for device'+json.dumps(device, default=str))
-            if hasattr(config,'shift_type_device_mapping'):
-                update_shift_last_sync_timestamp(config.shift_type_device_mapping)
+            if hasattr(erpnext_config,'shift_type_device_mapping'):
+                update_shift_last_sync_timestamp(erpnext_config.shift_type_device_mapping)
             status.set('mission_accomplished_timestamp', str(datetime.datetime.now()))
             info_logger.info("Mission Accomplished!")
     except:
@@ -75,24 +55,24 @@ def main():
 
 
 def pull_process_and_push_data(device, device_attendance_logs=None):
-    """ Takes a single device config as param and pulls data from that device.
+    """ Takes a single device erpnext_config as param and pulls data from that device.
 
     params:
-    device: a single device config object from the local_config file
+    device: a single device erpnext_config object from the local_erpnext_config file
     device_attendance_logs: fetching from device is skipped if this param is passed. used to restart failed fetches from previous runs.
     """
-    attendance_success_log_file = '_'.join(["attendance_success_log", device['device_id']])
-    attendance_failed_log_file = '_'.join(["attendance_failed_log", device['device_id']])
-    attendance_success_logger = setup_logger(attendance_success_log_file, '/'.join([config.LOGS_DIRECTORY, attendance_success_log_file])+'.log')
-    attendance_failed_logger = setup_logger(attendance_failed_log_file, '/'.join([config.LOGS_DIRECTORY, attendance_failed_log_file])+'.log')
+    attendance_success_log_file = '_'.join(["attendance_success_log", device.device_id])
+    attendance_failed_log_file = '_'.join(["attendance_failed_log", device.device_id])
+    attendance_success_logger = setup_logger(attendance_success_log_file, '/'.join([erpnext_config.LOGS_DIRECTORY, attendance_success_log_file])+'.log')
+    attendance_failed_logger = setup_logger(attendance_failed_log_file, '/'.join([erpnext_config.LOGS_DIRECTORY, attendance_failed_log_file])+'.log')
     if not device_attendance_logs:
-        device_attendance_logs = get_all_attendance_from_device(device['ip'], device_id=device['device_id'], clear_from_device_on_fetch=device['clear_from_device_on_fetch'])
+        device_attendance_logs = get_all_attendance_from_device(device.ip, device_id=device.device_id, clear_from_device_on_fetch=device.clear_from_device_on_fetch)
         if not device_attendance_logs:
             return
-    # for finding the last successfull push and restart from that point (or) from a set 'config.IMPORT_START_DATE' (whichever is later)
+    # for finding the last successfull push and restart from that point (or) from a set 'erpnext_config.IMPORT_START_DATE' (whichever is later)
     index_of_last = -1
-    last_line = get_last_line_from_file('/'.join([config.LOGS_DIRECTORY, attendance_success_log_file])+'.log')
-    import_start_date = _safe_convert_date(config.IMPORT_START_DATE, "%Y%m%d")
+    last_line = get_last_line_from_file('/'.join([erpnext_config.LOGS_DIRECTORY, attendance_success_log_file])+'.log')
+    import_start_date = _safe_convert_date(erpnext_config.IMPORT_START_DATE, "%Y%m%d")
     if last_line or import_start_date:
         last_user_id = None
         last_timestamp = None
@@ -117,7 +97,7 @@ def pull_process_and_push_data(device, device_attendance_logs=None):
                     break
 
     for device_attendance_log in device_attendance_logs[index_of_last+1:]:
-        punch_direction = device['punch_direction']
+        punch_direction = device.punch_direction
         if punch_direction == 'AUTO':
             if device_attendance_log['punch'] in device_punch_values_OUT:
                 punch_direction = 'OUT'
@@ -125,7 +105,7 @@ def pull_process_and_push_data(device, device_attendance_logs=None):
                 punch_direction = 'IN'
             else:
                 punch_direction = None
-        erpnext_status_code, erpnext_message = send_to_erpnext(device_attendance_log['user_id'], device_attendance_log['timestamp'], device['device_id'], punch_direction)
+        erpnext_status_code, erpnext_message = send_to_erpnext(device_attendance_log['user_id'], device_attendance_log['timestamp'], device.device_id, punch_direction)
         if erpnext_status_code == 200:
             attendance_success_logger.info("\t".join([erpnext_message, str(device_attendance_log['uid']),
                 str(device_attendance_log['user_id']), str(device_attendance_log['timestamp'].timestamp()),
@@ -178,10 +158,10 @@ def send_to_erpnext(employee_field_value, timestamp, device_id=None, log_type=No
     """
     Example: send_to_erpnext('12349',datetime.datetime.now(),'HO1','IN')
     """
-    endpoint_app = "hrms" if ERPNEXT_VERSION > 13 else "erpnext"
-    url = f"{config.ERPNEXT_URL}/api/method/{endpoint_app}.hr.doctype.employee_checkin.employee_checkin.add_log_based_on_employee_field"
+    endpoint_app = "hrms" if erpnext_version(15) > 13 else "erpnext"
+    url = f"{erpnext_config.ERPNEXT_URL}/api/method/{endpoint_app}.hr.doctype.employee_checkin.employee_checkin.add_log_based_on_employee_field"
     headers = {
-        'Authorization': "token "+ config.ERPNEXT_API_KEY + ":" + config.ERPNEXT_API_SECRET,
+        'Authorization': "token "+ erpnext_config.ERPNEXT_API_KEY + ":" + erpnext_config.ERPNEXT_API_SECRET,
         'Accept': 'application/json'
     }
     data = {
@@ -195,7 +175,7 @@ def send_to_erpnext(employee_field_value, timestamp, device_id=None, log_type=No
         return 200, json.loads(response._content)['message']['name']
     else:
         error_str = _safe_get_error_str(response)
-        if EMPLOYEE_NOT_FOUND_ERROR_MESSAGE in error_str:
+        if Errors.EMPLOYEE_NOT_FOUND_ERROR_MESSAGE in error_str:
             error_logger.error('\t'.join(['Error during ERPNext API Call.', str(employee_field_value), str(timestamp.timestamp()), str(device_id), str(log_type), error_str]))
             # TODO: send email?
         else:
@@ -214,16 +194,16 @@ def update_shift_last_sync_timestamp(shift_type_device_mapping):
     for shift_type_device_map in shift_type_device_mapping:
         all_devices_pushed = True
         pull_timestamp_array = []
-        for device_id in shift_type_device_map['related_device_id']:
+        for device_id in shift_type_device_map.related_device_id:
             if not status.get(f'{device_id}_push_timestamp'):
                 all_devices_pushed = False
                 break
             pull_timestamp_array.append(_safe_convert_date(status.get(f'{device_id}_pull_timestamp'), "%Y-%m-%d %H:%M:%S.%f"))
         if all_devices_pushed:
             min_pull_timestamp = min(pull_timestamp_array)
-            if isinstance(shift_type_device_map['shift_type_name'], str): # for backward compatibility of config file
-                shift_type_device_map['shift_type_name'] = [shift_type_device_map['shift_type_name']]
-            for shift in shift_type_device_map['shift_type_name']:
+            if isinstance(shift_type_device_map.shift_type_name, str): # for backward compatibility of erpnext_config file
+                shift_type_device_map.shift_type_name = [shift_type_device_map.shift_type_name]
+            for shift in shift_type_device_map.shift_type_name:
                 try:
                     sync_current_timestamp = _safe_convert_date(status.get(f'{shift}_sync_timestamp'), "%Y-%m-%d %H:%M:%S.%f")
                     if (sync_current_timestamp and min_pull_timestamp > sync_current_timestamp) or (min_pull_timestamp and not sync_current_timestamp):
@@ -234,9 +214,9 @@ def update_shift_last_sync_timestamp(shift_type_device_mapping):
                     error_logger.exception('Exception in update_shift_last_sync_timestamp, for shift:'+shift)
 
 def send_shift_sync_to_erpnext(shift_type_name, sync_timestamp):
-    url = config.ERPNEXT_URL + "/api/resource/Shift Type/" + shift_type_name
+    url = erpnext_config.ERPNEXT_URL + "/api/resource/Shift Type/" + shift_type_name
     headers = {
-        'Authorization': "token "+ config.ERPNEXT_API_KEY + ":" + config.ERPNEXT_API_SECRET,
+        'Authorization': "token "+ erpnext_config.ERPNEXT_API_KEY + ":" + erpnext_config.ERPNEXT_API_SECRET,
         'Accept': 'application/json'
     }
     data = {
@@ -289,7 +269,7 @@ def setup_logger(name, log_file, level=logging.INFO, formatter=None):
     return logger
 
 def get_dump_file_name_and_directory(device_id, device_ip):
-    return config.LOGS_DIRECTORY + '/' + device_id + "_" + device_ip.replace('.', '_') + '_last_fetch_dump.json'
+    return erpnext_config.LOGS_DIRECTORY + '/' + device_id + "_" + device_ip.replace('.', '_') + '_last_fetch_dump.json'
 
 def _apply_function_to_key(obj, key, fn):
     obj[key] = fn(obj[key])
@@ -313,11 +293,11 @@ def _safe_get_error_str(res):
     return error_str
 
 # setup logger and status
-if not os.path.exists(config.LOGS_DIRECTORY):
-    os.makedirs(config.LOGS_DIRECTORY)
-error_logger = setup_logger('error_logger', '/'.join([config.LOGS_DIRECTORY, 'error.log']), logging.ERROR)
-info_logger = setup_logger('info_logger', '/'.join([config.LOGS_DIRECTORY, 'logs.log']))
-status = pickledb.load('/'.join([config.LOGS_DIRECTORY, 'status.json']), True)
+if not os.path.exists(erpnext_config.LOGS_DIRECTORY):
+    os.makedirs(erpnext_config.LOGS_DIRECTORY)
+error_logger = setup_logger('error_logger', '/'.join([erpnext_config.LOGS_DIRECTORY, 'error.log']), logging.ERROR)
+info_logger = setup_logger('info_logger', '/'.join([erpnext_config.LOGS_DIRECTORY, 'logs.log']))
+status = pickledb.load('/'.join([erpnext_config.LOGS_DIRECTORY, 'status.json']), True)
 
 def infinite_loop(sleep_time=15):
     print("Service Running...")
