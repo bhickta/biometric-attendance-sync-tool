@@ -2,6 +2,7 @@ from attendance import AttendanceDevice
 from local_config import DeviceConfig, ErpNextConfig
 import logging, os, pickledb
 from logger import ErpnextLogger, ErpnextFileHandler
+import datetime
 
 ErpnextFileHandler.setup_dir()
 device = DeviceConfig(
@@ -25,7 +26,24 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
-@app.get("/get_logs/")
-def read_logs(clear_logs: bool = False):
-    logs_data = device.get_attendance(clear_logs)
+
+@app.get("/logs")
+def logs(clear_logs: bool = False):
+    # logs_data = device.get_attendance(clear_logs)
+    logs_data = [
+        {
+            "uid": 12,
+            "user_id": "1",
+            "timestamp": datetime.datetime(2024, 1, 3, 9, 3, 29),
+            "status": 15,
+            "punch": 0,
+        },
+        {
+            "uid": 13,
+            "user_id": "3",
+            "timestamp": datetime.datetime(2024, 1, 3, 9, 11, 7),
+            "status": 15,
+            "punch": 0,
+        },
+    ]
     return logs_data
